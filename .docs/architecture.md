@@ -8,7 +8,9 @@
 5. Backend sanitizes LaTeX using Regex and returns payload.
 6. Frontend parses JSON and pushes updates to Desmos API via `setExpression`.
 
-## Folder Structure 
+## Folder and Project Structure 
+
+```text
 AI-Powered-Calculus-Visualizer/
 ├── backend/
 │   ├── main.py
@@ -41,6 +43,7 @@ AI-Powered-Calculus-Visualizer/
 ├── .env
 ├── run.py
 └── requirements.txt
+```
 
 ## Tech Stack
 * Backend: Python 3.11+, FastAPI, Uvicorn, Pydantic, SQL Alchemy
