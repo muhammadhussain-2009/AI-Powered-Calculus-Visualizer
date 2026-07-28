@@ -8,39 +8,39 @@
 5. Backend sanitizes LaTeX using Regex and returns payload.
 6. Frontend parses JSON and pushes updates to Desmos API via `setExpression`.
 
-## Folder Structure
-/calculus-visualizer
-|-- /backend
-|   |-- main.py
-|   |-- ai_pipeline.py
-|   |-- schemas.py
-|   |-- requirements.txt
-|-- /frontend
-|   |-- index.html
-|   |-- styles.css
-|   |-- app.js
-|-- /tests
-|   |-- test_api.py
-|   |-- test_eval.py
-|-- /security
-|   |-- __init__.py 
-|   |-- auth.py
-|   |-- database_sec.py
-|   |--protection.py
-|-- /docs
-|   |-- agents.md 
-|   |-- skill.md
-|   |-- architecture.md
-|   |-- phases.md 
-|   |-- rules.md 
-|   |-- prd.md
-|-- Dockerfile 
-|--docker-compose.yml
-|-- gitignore
-|-- .env.example
-|-- .env
-|-- run.py
-|-- requirements.txt
+## Folder Structure 
+AI-Powered-Calculus-Visualizer/
+├── backend/
+│   ├── main.py
+│   ├── ai_pipeline.py
+│   ├── schemas.py
+│   └── requirements.txt
+├── frontend/
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
+├── tests/
+│   ├── test_api.py
+│   └── test_eval.py
+├── security/
+│   ├── __init__.py 
+│   ├── auth.py
+│   ├── database_sec.py
+│   └── protection.py
+├── docs/
+│   ├── agents.md 
+│   ├── skill.md
+│   ├── architecture.md
+│   ├── phases.md 
+│   ├── rules.md 
+│   └── prd.md
+├── Dockerfile 
+├── docker-compose.yml
+├── gitignore
+├── .env.example
+├── .env
+├── run.py
+└── requirements.txt
 
 ## Tech Stack
 * Backend: Python 3.11+, FastAPI, Uvicorn, Pydantic, SQL Alchemy
