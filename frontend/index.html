@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Calculus Visualizer - Interactive calculus graphing tool using Desmos Graphing Calculator API and FastAPI.">
+    <title>Calculus Visualizer - Interactive Graphing</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Desmos API (v1.8) -->
+    <script id="desmos-api-script" src="https://www.desmos.com/api/v1.8/calculator.js?apiKey=7123f465542c43e186f8522a861ef521"></script>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Controls -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">∫</div>
+                <div class="brand-text">
+                    <h1>Calculus Visualizer</h1>
+                    <span class="badge">Calculus Engine</span>
+                </div>
+            </div>
+
+            <!-- Input Form -->
+            <form id="visualization-form" class="input-card">
+                <label for="prompt-input" class="form-label">
+                    <span>Calculus Concept or Function</span>
+                    <span class="tooltip-icon" title="Enter an equation e.g., 'y = 3x + 34', 'x^2 + y^2 = 25', or a concept like 'Riemann sum of x^2'">?</span>
+                </label>
+                <div class="input-wrapper">
+                    <textarea 
+                        id="prompt-input" 
+                        name="prompt" 
+                        rows="3" 
+                        placeholder="e.g., y = 3x + 34, x^2 + y^2 = 25, Riemann sum of x^2 from 0 to 3, or Tangent line to sin(x)..."
+                        required
+                    ></textarea>
+                    <button type="submit" id="submit-btn" class="btn btn-primary">
+                        <span class="btn-text">Visualize Graph</span>
+                        <span class="spinner hidden" id="btn-spinner"></span>
+                    </button>
+                </div>
+            </form>
+
+            <!-- Quick Preset Concepts -->
+            <div class="preset-section">
+                <div class="section-title">Explore Calculus Concepts & Curves</div>
+                <div class="preset-chips">
+                    <button class="chip" data-prompt="y = 3x + 34">Linear Equation: y = 3x + 34</button>
+                    <button class="chip" data-prompt="Riemann sum of x^2 from 0 to 3 with n=6 rectangles">∫ Riemann Sum</button>
+                    <button class="chip" data-prompt="Tangent line to sin(x) at x=1 with derivative slope">d/dx Tangent Line</button>
+                    <button class="chip" data-prompt="Area under f(x) = cos(x) + 1.5 from -2 to 2">∫ Area Under Curve</button>
+                    <button class="chip" data-prompt="Taylor polynomial approximation of sin(x) centered at 0">Σ Taylor Series</button>
+                    <button class="chip" data-prompt="Local extrema and critical points of x^3 - 3x">f'(x) Extrema & Slope</button>
+                </div>
+            </div>
+
+            <!-- Concept Explanation Panel -->
+            <div id="explanation-card" class="info-card hidden">
+                <h3 id="vis-title" class="card-title">Concept Explanation</h3>
+                <p id="vis-explanation" class="card-text">Submit a prompt or click a preset to view concept details.</p>
+                <div class="meta-row">
+                    <span id="vis-time" class="meta-item">⏱️ 0 ms</span>
+                    <span id="vis-count" class="meta-item">📊 0 Curves</span>
+                </div>
+            </div>
+
+            <!-- Rendered Expressions Drawer -->
+            <div class="expressions-container">
+                <div class="section-title flex-between">
+                    <span>Active Desmos Expressions</span>
+                    <button id="clear-btn" class="btn-text-sm">Clear Graph</button>
+                </div>
+                <ul id="expression-list" class="expression-list">
+                    <li class="empty-state">No expressions active. Type a prompt, use Desmos calculator, or click a preset above.</li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Workspace (Desmos Calculator) -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="status-indicator">
+                    <span class="status-dot healthy" id="status-dot"></span>
+                    <span id="api-status-text">Graphing Engine Active</span>
+                </div>
+                <div class="header-actions">
+                    <button id="keypad-toggle-btn" class="btn btn-secondary" title="Toggle On-Screen Keypad">⌨️ Keypad</button>
+                    <button id="angle-mode-btn" class="btn btn-secondary" title="Toggle Angle Mode (Radians / Degrees)">Radians</button>
+                    <button id="reset-view-btn" class="btn btn-secondary" title="Reset Default View">Reset View</button>
+                    <button id="export-png-btn" class="btn btn-secondary" title="Export Image">Export Image</button>
+                </div>
+            </header>
+
+            <!-- Desmos Calculator Container -->
+            <div class="calculator-wrapper">
+                <div id="desmos-calculator"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Application Script -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
