@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  calculus-visualizer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: calculus_visualizer_app
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DATABASE_FILE=calculus_vis.db
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - DESMOS_API_KEY=${DESMOS_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+    volumes:
+      - .:/app
+    restart: unless-stopped
