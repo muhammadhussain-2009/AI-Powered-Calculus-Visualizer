@@ -1,0 +1,46 @@
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Python & Caching
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+.tox/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# SQLite Databases, Storage & Logs
+*.db
+*.sqlite
+*.sqlite3
+calculus_vis.db
+*.log
+*.sqlite-journal
+
+# Node.js & Frontend Build Outputs
+node_modules/
+dist/
+build/
+.cache/
+
+# OS & Editor Metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+.gemini/
+*.swp
+*~
