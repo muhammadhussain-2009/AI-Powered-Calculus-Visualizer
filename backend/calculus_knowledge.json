@@ -1,0 +1,237 @@
+[
+  {
+    "concept_name": "implicit_differentiation",
+    "description": "Implicit Differentiation of non-explicit relations (e.g., circles, ellipses, folium of Descartes) with tangent lines.",
+    "desmos_templates": [
+      "x^2 + y^2 = 25",
+      "x_1 = 3",
+      "y_1 = 4",
+      "(x_1, y_1)",
+      "y - y_1 = -\\frac{x_1}{y_1} \\cdot (x - x_1)"
+    ]
+  },
+  {
+    "concept_name": "taylor_series",
+    "description": "Taylor & Maclaurin Polynomial Approximations around a point x = a.",
+    "desmos_templates": [
+      "f(x) = \\sin(x)",
+      "a = 0",
+      "T_1(x) = x",
+      "T_3(x) = x - \\frac{x^3}{6}",
+      "T_5(x) = x - \\frac{x^3}{6} + \\frac{x^5}{120}"
+    ]
+  },
+  {
+    "concept_name": "optimization",
+    "description": "Optimization and Extrema finding local max/min points via critical values where f'(x) = 0.",
+    "desmos_templates": [
+      "f(x) = x^3 - 3x",
+      "g(x) = \\frac{d}{dx}f(x)",
+      "x_1 = -1",
+      "x_2 = 1",
+      "(x_1, f(x_1))",
+      "(x_2, f(x_2))",
+      "y = f(x_1)",
+      "y = f(x_2)"
+    ]
+  },
+  {
+    "concept_name": "slope_fields",
+    "description": "Slope fields / direction fields for first-order Ordinary Differential Equations dy/dx = f(x, y).",
+    "desmos_templates": [
+      "f(x, y) = x + y",
+      "(1, 1)",
+      "y - 1 = f(1, 1) \\cdot (x - 1) \\{0.8 \\le x \\le 1.2\\}",
+      "y = -x - 1 + 2e^x"
+    ]
+  },
+  {
+    "concept_name": "riemann_sum",
+    "description": "Left, Right, or Midpoint Riemann Sums approximating definite integrals with n rectangular subintervals.",
+    "desmos_templates": [
+      "f(x) = x^2",
+      "a = 0",
+      "b = 3",
+      "n = 6",
+      "w = \\frac{b - a}{n}",
+      "S = \\sum_{k=1}^{n} f(a + k \\cdot w) \\cdot w",
+      "0 \\le y \\le f(a + \\operatorname{floor}(\\frac{x-a}{w}) \\cdot w + w) \\{a \\le x \\le b\\}"
+    ]
+  },
+  {
+    "concept_name": "newtons_method",
+    "description": "Iterative root-finding algorithm using tangent lines x_{n+1} = x_n - f(x_n)/f'(x_n).",
+    "desmos_templates": [
+      "f(x) = x^3 - 2x - 5",
+      "x_0 = 3",
+      "(x_0, f(x_0))",
+      "g(x) = \\frac{d}{dx}f(x)",
+      "y - f(x_0) = g(x_0) \\cdot (x - x_0)",
+      "x_1 = x_0 - \\frac{f(x_0)}{g(x_0)}",
+      "(x_1, 0)"
+    ]
+  },
+  {
+    "concept_name": "eulers_method",
+    "description": "Step-by-step numerical solver for IVP differential equations dy/dx = f(x, y).",
+    "desmos_templates": [
+      "f(x, y) = x + y",
+      "h = 0.5",
+      "(0, 1)",
+      "(0.5, 1.5)",
+      "(1.0, 2.25)",
+      "y - 1 = 1 \\cdot (x - 0) \\{0 \\le x \\le 0.5\\}"
+    ]
+  },
+  {
+    "concept_name": "area_between_curves",
+    "description": "Shaded bounded area between two continuous functions f(x) and g(x) on [a, b].",
+    "desmos_templates": [
+      "f(x) = x + 2",
+      "g(x) = x^2",
+      "a = -1",
+      "b = 2",
+      "g(x) \\le y \\le f(x) \\{-1 \\le x \\le 2\\}",
+      "A = \\int_{a}^{b} (f(x) - g(x)) dx"
+    ]
+  },
+  {
+    "concept_name": "arc_length",
+    "description": "Arc length integral measurement along a smooth curve y = f(x) from x = a to x = b.",
+    "desmos_templates": [
+      "f(x) = x^{\\frac{3}{2}}",
+      "a = 0",
+      "b = 4",
+      "(a, f(a))",
+      "(b, f(b))",
+      "g(x) = \\frac{d}{dx}f(x)",
+      "L = \\int_{a}^{b} \\sqrt{1 + (g(x))^2} dx"
+    ]
+  },
+  {
+    "concept_name": "limit_secant",
+    "description": "Secant line connecting two points approaching the tangent line as distance h -> 0.",
+    "desmos_templates": [
+      "f(x) = x^2",
+      "x_1 = 1",
+      "h = 1.0",
+      "(x_1, f(x_1))",
+      "(x_1 + h, f(x_1 + h))",
+      "m_s = \\frac{f(x_1 + h) - f(x_1)}{h}",
+      "y - f(x_1) = m_s \\cdot (x - x_1)",
+      "g(x) = \\frac{d}{dx}f(x)",
+      "y - f(x_1) = g(x_1) \\cdot (x - x_1)"
+    ]
+  },
+  {
+    "concept_name": "mvt",
+    "description": "Mean Value Theorem finding c in (a, b) where instantaneous slope f'(c) equals secant slope.",
+    "desmos_templates": [
+      "f(x) = x^3 - 3x",
+      "a = -2",
+      "b = 2",
+      "(a, f(a))",
+      "(b, f(b))",
+      "y - f(a) = \\frac{f(b) - f(a)}{b - a} \\cdot (x - a)",
+      "c = 0",
+      "(c, f(c))",
+      "g(x) = \\frac{d}{dx}f(x)",
+      "y - f(c) = g(c) \\cdot (x - c)"
+    ]
+  },
+  {
+    "concept_name": "derivative_rate_of_change",
+    "description": "Derivative as Instantaneous Rate of Change, Position s(t), Velocity v(t), Acceleration a(t).",
+    "desmos_templates": [
+      "s(t) = -16t^2 + 64t",
+      "v(t) = \\frac{d}{dt}s(t)",
+      "a(t) = \\frac{d}{dt}v(t)",
+      "t_1 = 2",
+      "(t_1, s(t_1))"
+    ]
+  },
+  {
+    "concept_name": "critical_points_extrema",
+    "description": "First Derivative Test, local maximums, local minimums, and critical points.",
+    "desmos_templates": [
+      "f(x) = 2x^3 - 3x^2 - 12x + 5",
+      "g(x) = \\frac{d}{dx}f(x)",
+      "x_1 = -1",
+      "x_2 = 2",
+      "(x_1, f(x_1))",
+      "(x_2, f(x_2))"
+    ]
+  },
+  {
+    "concept_name": "concavity_inflection",
+    "description": "Second derivative test, concavity up/down regions, and points of inflection where f''(x) = 0.",
+    "desmos_templates": [
+      "f(x) = x^3 - 3x",
+      "g(x) = \\frac{d^2}{dx^2}f(x)",
+      "x_0 = 0",
+      "(x_0, f(x_0))"
+    ]
+  },
+  {
+    "concept_name": "integration_by_parts",
+    "description": "Integration by Parts technique decomposing integrals into int u dv = uv - int v du.",
+    "desmos_templates": [
+      "f(x) = x \\cdot \\sin(x)",
+      "F(x) = -x \\cdot \\cos(x) + \\sin(x)",
+      "a = 0",
+      "b = 3.14159",
+      "0 \\le y \\le f(x) \\{a \\le x \\le b\\}"
+    ]
+  },
+  {
+    "concept_name": "disc_washer_method",
+    "description": "Solids of revolution volume calculated using circular discs or washers rotated about an axis.",
+    "desmos_templates": [
+      "f(x) = \\sqrt{x}",
+      "a = 0",
+      "b = 4",
+      "0 \\le y \\le f(x) \\{a \\le x \\le b\\}",
+      "V = \\pi \\int_{a}^{b} (f(x))^2 dx"
+    ]
+  },
+  {
+    "concept_name": "shell_method",
+    "description": "Cylindrical shell method for finding volume of revolution V = 2*pi * int(x * f(x) dx).",
+    "desmos_templates": [
+      "f(x) = 3x - x^2",
+      "a = 0",
+      "b = 3",
+      "0 \\le y \\le f(x) \\{a \\le x \\le b\\}",
+      "V = 2\\pi \\int_{a}^{b} x \\cdot f(x) dx"
+    ]
+  },
+  {
+    "concept_name": "parametric_curves",
+    "description": "Parametric 2D curves (x(t), y(t)) with velocity vectors and path trajectory.",
+    "desmos_templates": [
+      "(3\\cos(t), 2\\sin(t))",
+      "t_1 = 1",
+      "(3\\cos(t_1), 2\\sin(t_1))"
+    ]
+  },
+  {
+    "concept_name": "polar_curves",
+    "description": "Polar coordinate curves r = f(theta) such as cardioids, roses, and polar area sectors.",
+    "desmos_templates": [
+      "r = 1 + \\cos(\\theta)",
+      "r = 2\\sin(3\\theta)",
+      "A = \\frac{1}{2} \\int_{0}^{\\pi} (1 + \\cos(\\theta))^2 d\\theta"
+    ]
+  },
+  {
+    "concept_name": "related_rates",
+    "description": "Geometric or physical related rates problems involving implicit differentiation with respect to time t.",
+    "desmos_templates": [
+      "x^2 + y^2 = 25",
+      "t = 1",
+      "x(t) = 3",
+      "y(t) = 4",
+      "(x(t), y(t))"
+    ]
+  }
+]
