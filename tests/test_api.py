@@ -35,7 +35,7 @@ def test_health_check_endpoint():
 def test_security_headers_present():
     response = client.get("/health")
     assert response.headers.get("X-Content-Type-Options") == "nosniff"
-    assert response.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert response.headers.get("X-Frame-Options") == "DENY"
     assert "Content-Security-Policy" in response.headers
 
 def test_anonymous_jwt_session_issuance():
@@ -124,8 +124,18 @@ def test_pipeline_evaluator():
     assert eval_result["passed"] is True
     assert eval_result["score"] >= 0.8
 
+def get_auth_headers():
+    session_resp = client.get("/api/auth/session")
+    token = session_resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+def test_unauthenticated_request_rejected():
+    response = client.post("/api/visualize", json={"prompt": "Derivative of x^2"})
+    assert response.status_code == 401
+    assert "Authentication required" in response.json()["detail"]
+
 def test_visualize_endpoint_non_math_rejection():
-    response = client.post("/api/visualize", json={"prompt": "Write a recipe for cookies"})
+    response = client.post("/api/visualize", json={"prompt": "Write a recipe for cookies"}, headers=get_auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is False
@@ -133,7 +143,7 @@ def test_visualize_endpoint_non_math_rejection():
     assert "calculus or mathematics" in data["error"]
 
 def test_visualize_endpoint_valid_math():
-    response = client.post("/api/visualize", json={"prompt": "Limit: Secant line approaching tangent line for f(x) = x^2 at x = 1"})
+    response = client.post("/api/visualize", json={"prompt": "Limit: Secant line approaching tangent line for f(x) = x^2 at x = 1"}, headers=get_auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
@@ -141,7 +151,7 @@ def test_visualize_endpoint_valid_math():
     assert len(data["data"]["expressions"]) > 0
 
 def test_visualize_stream_endpoint():
-    response = client.post("/api/visualize/stream", json={"prompt": "Arc length of f(x) = x^(3/2) from x = 0 to x = 4"})
+    response = client.post("/api/visualize/stream", json={"prompt": "Arc length of f(x) = x^(3/2) from x = 0 to x = 4"}, headers=get_auth_headers())
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
     content = response.text
@@ -151,7 +161,7 @@ def test_visualize_stream_endpoint():
     assert '"type": "complete"' in content
 
 def test_logs_endpoint():
-    response = client.get("/api/logs")
+    response = client.get("/api/logs", headers=get_auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
@@ -379,5 +389,53 @@ def test_langgraph_self_correction_loop_routing():
         "validation_error": "Validation Error: Max retries"
     }
     assert should_retry(state_end) == END
+
+
+def test_rls_anonymous_user_data_isolation():
+    """
+    Verifies that Role-Level Security (RLS) restricts data access so that
+    each anonymous session can only read its own logs and data.
+    """
+    from security.rls import RLSEngine, SecurityContext, SecurityRole
+    from backend.database import log_visualization_request, get_visualization_logs
+
+    session_user_a = "session-user-alpha-123"
+    session_user_b = "session-user-beta-456"
+
+    # Log requests for User A and User B
+    asyncio.run(log_visualization_request(session_id=session_user_a, prompt="Area under x^2", status="SUCCESS"))
+    asyncio.run(log_visualization_request(session_id=session_user_b, prompt="Derivative of sin(x)", status="SUCCESS"))
+
+    # User A retrieves logs under RLS policy
+    logs_a = asyncio.run(get_visualization_logs(session_id=session_user_a, limit=10))
+    assert all(log["session_id"] == session_user_a for log in logs_a)
+    assert not any(log["session_id"] == session_user_b for log in logs_a)
+
+    # User B retrieves logs under RLS policy
+    logs_b = asyncio.run(get_visualization_logs(session_id=session_user_b, limit=10))
+    assert all(log["session_id"] == session_user_b for log in logs_b)
+    assert not any(log["session_id"] == session_user_a for log in logs_b)
+
+    # System Admin role can access all logs
+    admin_ctx = SecurityContext(session_id="admin-session", role=SecurityRole.SYSTEM_ADMIN)
+    logs_admin = asyncio.run(get_visualization_logs(context=admin_ctx, limit=50))
+    session_ids = [log["session_id"] for log in logs_admin]
+    assert session_user_a in session_ids
+    assert session_user_b in session_ids
+
+
+def test_rls_insert_policy_session_spoof_prevention():
+    """
+    Verifies that RLS insert policy overrides attempted session_id spoofing.
+    """
+    from security.rls import RLSEngine, SecurityContext, SecurityRole
+
+    user_ctx = SecurityContext(session_id="authentic-user-789")
+    spoofed_record = {"session_id": "malicious-admin-id", "prompt": "Test prompt"}
+
+    validated = RLSEngine.apply_insert_policy("visualization_logs", user_ctx, spoofed_record)
+    assert validated["session_id"] == "authentic-user-789"
+    assert validated["session_id"] != "malicious-admin-id"
+
 
 
