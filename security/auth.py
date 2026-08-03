@@ -40,13 +40,14 @@ def verify_jwt_token(token: str) -> dict:
 
 async def get_current_session(credentials: Optional[HTTPAuthorizationCredentials] = Security(security_bearer)) -> dict:
     """
-    FastAPI dependency to extract or generate session context.
+    FastAPI dependency to extract and verify session context.
+    Strictly enforces authentication before sensitive endpoints execute.
     """
     if not credentials or not credentials.credentials:
-        # Generate new anonymous session token if missing
-        token = create_anonymous_jwt_token()
-        payload = verify_jwt_token(token)
-        payload["new_token"] = token
-        return payload
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please obtain a session token via /api/auth/session.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
     
     return verify_jwt_token(credentials.credentials)
