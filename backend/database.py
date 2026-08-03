@@ -37,32 +37,67 @@ async def init_db_async():
         """)
         await db.commit()
 
+from security.rls import RLSEngine, SecurityContext, SecurityRole
+
 async def log_visualization_request(
     session_id: str,
     prompt: str,
     status: str,
     expressions_count: int = 0,
     processing_time_ms: float = 0.0,
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
+    context: Optional[SecurityContext] = None
 ) -> int:
-    """Logs a visualization request to the database asynchronously."""
+    """Logs a visualization request to the database asynchronously under RLS write policy."""
+    sec_ctx = context or SecurityContext(session_id=session_id)
+    record = RLSEngine.apply_insert_policy(
+        "visualization_logs",
+        sec_ctx,
+        {
+            "session_id": session_id,
+            "prompt": prompt,
+            "status": status,
+            "expressions_count": expressions_count,
+            "processing_time_ms": processing_time_ms,
+            "error_message": error_message
+        }
+    )
+
     async with aiosqlite.connect(DB_FILE) as db:
         cursor = await db.execute(
             """
             INSERT INTO visualization_logs (session_id, prompt, status, expressions_count, processing_time_ms, error_message)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (session_id, prompt, status, expressions_count, processing_time_ms, error_message)
+            (
+                record["session_id"],
+                record["prompt"],
+                record["status"],
+                record["expressions_count"],
+                record["processing_time_ms"],
+                record["error_message"]
+            )
         )
         await db.commit()
         return cursor.lastrowid
 
-async def get_visualization_logs(limit: int = 50) -> List[Dict[str, Any]]:
-    """Retrieves recent visualization logs asynchronously."""
+async def get_visualization_logs(
+    session_id: Optional[str] = None,
+    limit: int = 50,
+    context: Optional[SecurityContext] = None
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves visualization logs asynchronously under Role-Level Security (RLS) policy.
+    Users can only access their own session logs unless system admin role is present.
+    """
+    sec_ctx = context or SecurityContext(session_id=session_id or "anonymous")
+    base_sql = "SELECT * FROM visualization_logs ORDER BY created_at DESC LIMIT ?"
+    scoped_sql, params = RLSEngine.apply_read_policy(
+        "visualization_logs", sec_ctx, base_sql, [limit]
+    )
+
     async with aiosqlite.connect(DB_FILE) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM visualization_logs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ) as cursor:
+        async with db.execute(scoped_sql, params) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
