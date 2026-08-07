@@ -80,6 +80,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 1. Initialize Desmos Calculator with Full Desmos API Features
     function initDesmosCalculator() {
+        if (calculator) return;
+
         const elt = document.getElementById('desmos-calculator');
         if (!elt) {
             console.error('Element #desmos-calculator not found.');
@@ -93,6 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
+            elt.innerHTML = '';
             // Configure Desmos Graphing Calculator to full capabilities
             calculator = Desmos.GraphingCalculator(elt, {
                 keypad: true,
@@ -124,6 +127,10 @@ document.addEventListener('DOMContentLoaded', () => {
             window.addEventListener('resize', () => {
                 if (calculator) calculator.resize();
             });
+
+            setTimeout(() => {
+                if (calculator) calculator.resize();
+            }, 100);
 
             // Set initial default visualization
             renderDefaultGraph();
@@ -693,7 +700,53 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function loadDesmosScriptAndInit() {
+        if (typeof Desmos !== 'undefined') {
+            initDesmosCalculator();
+            return;
+        }
+
+        const defaultApiKey = 'dcb377017b3d49c87d4d15a5708806d1';
+        const scriptUrl = `https://www.desmos.com/api/v1.8/calculator.js?apiKey=${defaultApiKey}`;
+
+        let scriptElt = document.getElementById('desmos-api-script');
+        if (!scriptElt) {
+            scriptElt = document.createElement('script');
+            scriptElt.id = 'desmos-api-script';
+            scriptElt.src = scriptUrl;
+            document.head.appendChild(scriptElt);
+        } else if (!scriptElt.src || !scriptElt.src.includes('apiKey')) {
+            scriptElt.src = scriptUrl;
+        }
+
+        scriptElt.addEventListener('load', () => {
+            initDesmosCalculator();
+        });
+        scriptElt.addEventListener('error', (e) => {
+            console.error('Failed to load Desmos API script:', e);
+            const elt = document.getElementById('desmos-calculator');
+            if (elt) {
+                elt.innerHTML = '<div style="color:#f43f5e; padding:40px; text-align:center; font-weight:600;">Failed to load Desmos Graphing API script. Please check your network connection.</div>';
+            }
+        });
+
+        // Polling check in case window.Desmos becomes available asynchronously
+        let checkCount = 0;
+        const interval = setInterval(() => {
+            checkCount++;
+            if (typeof Desmos !== 'undefined') {
+                clearInterval(interval);
+                initDesmosCalculator();
+            } else if (checkCount > 40) {
+                clearInterval(interval);
+                if (typeof Desmos === 'undefined') {
+                    initDesmosCalculator();
+                }
+            }
+        }, 100);
+    }
+
     // Initialize
-    initDesmosCalculator();
+    loadDesmosScriptAndInit();
     initSession();
 });
