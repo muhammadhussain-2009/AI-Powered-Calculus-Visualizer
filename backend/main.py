@@ -93,9 +93,9 @@ async def get_anonymous_session(request: Request):
 @limiter.limit("30/minute")
 async def get_frontend_config(request: Request):
     """
-    Returns public frontend configuration including the Desmos API Key.
+    Returns public frontend configuration dynamically loaded from environment variables.
     """
-    desmos_key = os.getenv("DESMOS_API_KEY", "").strip() or "dcb31709b452b1cf9dc26972add0fda6"
+    desmos_key = os.getenv("DESMOS_API_KEY", "").strip()
     return {
         "desmos_api_key": desmos_key
     }
@@ -219,9 +219,11 @@ async def get_recent_visualization_logs(
     session: dict = Depends(get_current_session)
 ):
     """
-    Returns recent visualization logs asynchronously from SQLite database.
+    Returns recent visualization logs asynchronously from SQLite database under Role-Level Security (RLS).
+    Filters logs to strictly return records belonging to the authenticated session context.
     """
-    logs = await get_visualization_logs(limit=20)
+    session_id = session.get("session_id", "anonymous")
+    logs = await get_visualization_logs(session_id=session_id, limit=20)
     return {
         "success": True,
         "count": len(logs),
