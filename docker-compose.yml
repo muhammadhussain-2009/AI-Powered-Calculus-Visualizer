@@ -1,6 +1,36 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: calculus_vis_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-calculus_vis}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin_secure_pass_2026}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-app_user}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-app_secure_password_2026}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-calculus_vis_encryption_key_2026}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/certs:/var/lib/postgresql/certs:ro
+    ports:
+      - "5432:5432"
+    command: >
+      postgres 
+      -c ssl=on 
+      -c ssl_cert_file=/var/lib/postgresql/certs/server.crt 
+      -c ssl_key_file=/var/lib/postgresql/certs/server.key 
+      -c hba_file=/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres_admin} -d $${POSTGRES_DB:-calculus_vis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   calculus-visualizer:
     build:
       context: .
@@ -8,12 +38,24 @@ services:
     container_name: calculus_visualizer_app
     ports:
       - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
-      - PORT=8000
-      - DATABASE_FILE=calculus_vis.db
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - DESMOS_API_KEY=${DESMOS_API_KEY}
-      - JWT_SECRET=${JWT_SECRET}
+      PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-app_user}:${POSTGRES_APP_PASSWORD:-app_secure_password_2026}@db:5432/${POSTGRES_DB:-calculus_vis}?ssl=require
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-calculus_vis}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-app_user}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-app_secure_password_2026}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-calculus_vis_encryption_key_2026}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      DESMOS_API_KEY: ${DESMOS_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
     volumes:
       - .:/app
     restart: unless-stopped
+
+volumes:
+  pgdata:
