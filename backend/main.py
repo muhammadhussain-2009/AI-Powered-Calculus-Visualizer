@@ -1,5 +1,6 @@
 import time
 import os
+import logging
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -20,9 +21,12 @@ from backend.schemas import (
 from backend.database import init_db_async, log_visualization_request, get_visualization_logs
 from backend.datapipeline import process_and_verify_request
 from backend.evaluate import PipelineEvaluator
-from security.protection import SecurityHeadersMiddleware
+from security.protection import SecurityHeadersMiddleware, sanitize_user_input
 from security.auth import create_anonymous_jwt_token, get_current_session
 from security.rate_limiter import limiter, AI_API_RATE_LIMIT, custom_rate_limit_exceeded_handler
+from security.rls import SecurityContext, SecurityRole
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,17 +34,20 @@ async def lifespan(app: FastAPI):
     await init_db_async()
     yield
 
+from slowapi.middleware import SlowAPIMiddleware
 
 app = FastAPI(
     title="Calculus Visualizer API",
     description="Backend API for generating Desmos visualizations of calculus concepts via LLM.",
     version="1.0.0",
-    docs_url="/docs",
+    docs_url=None,   # Security: Disable public API docs
     redoc_url=None,  # Security: Disable redoc admin endpoint
+    openapi_url=None, # Security: Disable public openapi.json schema
     lifespan=lifespan
 )
 
 app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 app.add_exception_handler(RateLimitExceeded, custom_rate_limit_exceeded_handler)
 
 # Add Security Headers Middleware
@@ -72,7 +79,7 @@ async def health_check(request: Request):
         dependencies={
             "google_api_key": "configured" if google_key_configured else "missing",
             "desmos_api_key": "configured" if desmos_key_configured else "missing",
-            "async_database": "aiosqlite_ready"
+            "async_database": "postgresql_ready"
         }
     )
 
@@ -109,21 +116,34 @@ async def generate_visualization(
 ):
     """
     Main AI API endpoint: Validates math relevance, processes prompt via AI pipeline,
-    sanitizes LaTeX, evaluates mathematical validity, logs request asynchronously, and returns payload.
+    sanitizes user request input, evaluates validity, logs request under PostgreSQL RLS & pgcrypto, and returns payload.
     Strictly rate limited to 3 requests per 60 seconds (3/60seconds).
     """
     start_time = time.time()
     session_id = session.get("session_id", "anonymous")
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    raw_token = request.headers.get("Authorization", "").replace("Bearer ", "") if request.headers.get("Authorization") else None
+
+    sec_ctx = SecurityContext(
+        session_id=session_id,
+        role=SecurityRole.AUTHENTICATED_USER if session_id != "anonymous" else SecurityRole.ANONYMOUS_USER,
+        client_ip=client_ip
+    )
+
+    # Sanitize and validate request input prompt
+    clean_prompt = sanitize_user_input(payload.prompt)
 
     # Step 1: Datapipeline verification and preprocessing
-    is_valid_math, sanitized_prompt, metadata = process_and_verify_request(payload.prompt)
+    is_valid_math, sanitized_prompt, metadata = process_and_verify_request(clean_prompt)
     if not is_valid_math:
         error_msg = metadata.get("error", "Invalid or non-mathematical request.")
         await log_visualization_request(
             session_id=session_id,
-            prompt=payload.prompt,
+            prompt=clean_prompt,
             status="REJECTED_NON_MATH",
-            error_message=error_msg
+            error_message=error_msg,
+            jwt_token=raw_token,
+            context=sec_ctx
         )
         return VisualizeAPIResponse(
             success=False,
@@ -141,7 +161,9 @@ async def generate_visualization(
             session_id=session_id,
             prompt=sanitized_prompt,
             status="AI_PIPELINE_ERROR",
-            error_message=error_msg
+            error_message=error_msg,
+            jwt_token=raw_token,
+            context=sec_ctx
         )
         return VisualizeAPIResponse(
             success=False,
@@ -152,7 +174,7 @@ async def generate_visualization(
     # Step 3: Evaluate payload quality
     eval_result = PipelineEvaluator.evaluate_response(llm_response)
 
-    # Step 4: Asynchronously log request to SQLite database
+    # Step 4: Asynchronously log request to PostgreSQL database under RLS & pgcrypto encryption
     processing_time_ms = round((time.time() - start_time) * 1000, 2)
     await log_visualization_request(
         session_id=session_id,
@@ -160,7 +182,9 @@ async def generate_visualization(
         status="SUCCESS" if eval_result["passed"] else "EVAL_FAILED",
         expressions_count=len(llm_response.expressions),
         processing_time_ms=processing_time_ms,
-        error_message="; ".join(eval_result["issues"]) if eval_result["issues"] else None
+        error_message="; ".join(eval_result["issues"]) if eval_result["issues"] else None,
+        jwt_token=raw_token,
+        context=sec_ctx
     )
 
     return VisualizeAPIResponse(
@@ -177,9 +201,9 @@ async def generate_visualization_stream(
 ):
     """
     Server-Sent Events (SSE) Streaming AI Endpoint:
-    Streams LangGraph pipeline outputs (query analysis, concept metadata, expressions step-by-step).
+    Streams LangGraph pipeline outputs step-by-step.
     Supports POST with JSON body or GET with query parameters.
-    Strictly rate limited to 3 requests per 60 seconds (3/minute).
+    Strictly rate limited to 3 requests per 60 seconds (3/60seconds).
     """
     prompt_text = ""
     if request.method == "POST":
@@ -191,8 +215,11 @@ async def generate_visualization_stream(
     if not prompt_text:
         prompt_text = request.query_params.get("prompt", "")
 
+    # Sanitize and validate request prompt
+    clean_prompt = sanitize_user_input(prompt_text)
+
     # Step 1: Datapipeline verification and preprocessing
-    is_valid_math, sanitized_prompt, metadata = process_and_verify_request(prompt_text)
+    is_valid_math, sanitized_prompt, metadata = process_and_verify_request(clean_prompt)
     if not is_valid_math:
         error_msg = metadata.get("error", "Invalid or non-mathematical request.")
         async def error_generator():
@@ -201,16 +228,24 @@ async def generate_visualization_stream(
         return StreamingResponse(error_generator(), media_type="text/event-stream")
 
     # Step 2: Stream LangGraph workflow pipeline outputs
-    from backend.ai_pipeline import stream_calculus_visualization
-    return StreamingResponse(
-        stream_calculus_visualization(sanitized_prompt, metadata),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    try:
+        from backend.ai_pipeline import stream_calculus_visualization
+        return StreamingResponse(
+            stream_calculus_visualization(sanitized_prompt, metadata),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Streaming endpoint exception: {e}")
+        async def fallback_error_generator():
+            import json
+            yield f"data: {json.dumps({'type': 'error', 'error': 'Visualization stream encountered a temporary issue. Resetting graph view...', 'action': 'retry_or_reset'})}\n\n"
+        return StreamingResponse(fallback_error_generator(), media_type="text/event-stream")
+
 
 @app.get("/api/logs", response_model=dict, tags=["Logs"])
 @limiter.limit("10/minute")
@@ -219,11 +254,19 @@ async def get_recent_visualization_logs(
     session: dict = Depends(get_current_session)
 ):
     """
-    Returns recent visualization logs asynchronously from SQLite database under Role-Level Security (RLS).
+    Returns recent visualization logs asynchronously from PostgreSQL database under Role-Level Security (RLS).
     Filters logs to strictly return records belonging to the authenticated session context.
     """
     session_id = session.get("session_id", "anonymous")
-    logs = await get_visualization_logs(session_id=session_id, limit=20)
+    client_ip = request.client.host if request.client else "127.0.0.1"
+
+    sec_ctx = SecurityContext(
+        session_id=session_id,
+        role=SecurityRole.AUTHENTICATED_USER if session_id != "anonymous" else SecurityRole.ANONYMOUS_USER,
+        client_ip=client_ip
+    )
+
+    logs = await get_visualization_logs(session_id=session_id, limit=20, context=sec_ctx)
     return {
         "success": True,
         "count": len(logs),
@@ -242,8 +285,6 @@ async def verify_graph_visual_feedback(
     Receives base64 PNG screenshot of the final rendered Desmos graph from frontend,
     validates visual rendering feedback, and logs verification receipt.
     """
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"Visual feedback screenshot received for prompt: '{payload.prompt}' (image payload size: {len(payload.image)} bytes)")
     
     return GraphVerificationResponse(
