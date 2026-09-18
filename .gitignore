@@ -21,13 +21,17 @@ venv/
 env/
 ENV/
 
-# SQLite Databases, Storage & Logs
-*.db
-*.sqlite
-*.sqlite3
-calculus_vis.db
+# PostgreSQL Artifacts, Storage & Logs
+postgres/certs/*.crt
+postgres/certs/*.key
+postgres/certs/*.pem
+postgres/certs/*.srl
+postgres_data/
+pgdata/
 *.log
-*.sqlite-journal
+logs/
+*.dump
+*.sql.bak
 
 # Node.js & Frontend Build Outputs
 node_modules/
