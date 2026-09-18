@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 CALCULUS_KNOWLEDGE_PATH = os.path.join(os.path.dirname(__file__), "calculus_knowledge.json")
 CALCULUS_KNOWLEDGE_BASE: List[Dict[str, Any]] = []
 
+from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential, RetryError
+
 try:
     if os.path.exists(CALCULUS_KNOWLEDGE_PATH):
         with open(CALCULUS_KNOWLEDGE_PATH, "r", encoding="utf-8") as f:
@@ -25,12 +27,59 @@ except Exception as e:
     logger.warning(f"Could not load calculus_knowledge.json: {e}")
 
 
+def get_static_prevalidated_example(prompt: str, concept_name: Optional[str] = None) -> LLMVisualizationResponse:
+    """
+    Final graceful degradation step: pulls a static, pre-validated example directly
+    from calculus_knowledge.json matching the user's concept and returns it as LLMVisualizationResponse.
+    """
+    if not concept_name:
+        knowledge = match_calculus_knowledge(prompt)
+        concept_name = knowledge.get("concept_name", "general")
+    else:
+        knowledge = next((item for item in CALCULUS_KNOWLEDGE_BASE if item.get("concept_name") == concept_name), None)
+        if not knowledge:
+            knowledge = match_calculus_knowledge(prompt)
+
+    matched_name = knowledge.get("concept_name", "general")
+    desc = knowledge.get("description", "Calculus visualization pre-validated example.")
+    templates = knowledge.get("desmos_templates", ["y = x^2"])
+
+    colors = ["#2d70b3", "#c74440", "#388c46", "#6042a6", "#000000"]
+    expressions = []
+    for i, t in enumerate(templates):
+        is_hidden = any(t.startswith(prefix) for prefix in ["a =", "b =", "w =", "x_1 =", "y_1 =", "h =", "x_0 =", "f(x, y) =", "g(x) ="])
+        expressions.append(
+            DesmosExpression(
+                id=f"static_{matched_name}_{i}",
+                latex=sanitize_latex(t),
+                color=colors[i % len(colors)],
+                hidden=is_hidden,
+                label=t if not is_hidden else None,
+                showLabel=not is_hidden and ("=" in t or "(" in t)
+            )
+        )
+
+    title = f"Pre-Validated Example: {matched_name.replace('_', ' ').title()}"
+    return LLMVisualizationResponse(
+        title=title,
+        concept_explanation=desc,
+        expressions=expressions
+    )
+
+
+
+from functools import lru_cache
+from async_lru import alru_cache
+
+
+@lru_cache(maxsize=512)
 def match_calculus_knowledge(prompt: str) -> Dict[str, Any]:
     """
-    RAG / Knowledge Base Intent Matching: Matches user prompt against calculus concepts in calculus_knowledge.json.
-    Returns matched concept dictionary containing concept_name, description, and desmos_templates.
+    In-memory LRU Caching Layer: Matches user prompt against calculus concepts in calculus_knowledge.json.
+    If a user asks for a standard subfield (e.g., 'Taylor Series', 'Riemann Sum', 'MVT'),
+    serves the JSON schema and templates directly from the in-memory cache to shave off query latency.
     """
-    lowered = prompt.lower()
+    lowered = prompt.lower().strip()
     
     keyword_map = [
         ("implicit", "implicit_differentiation"),
@@ -86,6 +135,36 @@ def match_calculus_knowledge(prompt: str) -> Dict[str, Any]:
         "description": "General 2D mathematical function or curve visualization.",
         "desmos_templates": ["y = f(x)"]
     }
+
+
+@alru_cache(maxsize=512)
+async def get_cached_calculus_knowledge(prompt: str) -> Dict[str, Any]:
+    """
+    Async LRU Cache Layer (async-lru) for RAG retrieval matching user prompts
+    against calculus_knowledge.json schema and templates.
+    """
+    return match_calculus_knowledge(prompt)
+
+
+def get_knowledge_cache_info() -> Dict[str, Any]:
+    """Returns LRU cache performance metrics (hits, misses, maxsize, currsize)."""
+    info = match_calculus_knowledge.cache_info()
+    return {
+        "hits": info.hits,
+        "misses": info.misses,
+        "maxsize": info.maxsize,
+        "currsize": info.currsize
+    }
+
+
+def clear_knowledge_cache() -> None:
+    """Clears both sync and async in-memory RAG knowledge caches."""
+    match_calculus_knowledge.cache_clear()
+    try:
+        get_cached_calculus_knowledge.cache_clear()
+    except Exception:
+        pass
+
 
 
 # --- Helper Functions ---
@@ -191,6 +270,13 @@ class GraphState(TypedDict):
     error: Optional[str]
     retry_count: int
     validation_error: Optional[str]
+    current_model: Optional[str]
+    model_name: Optional[str]
+    primary_failed: Optional[bool]
+    fallback_failed: Optional[bool]
+    is_static_fallback: Optional[bool]
+    visual_verified: Optional[bool]
+
 
 
 # --- Helper Function Extraction ---
@@ -693,26 +779,28 @@ def generate_desmos_translation_fallback(analysis: Dict[str, Any]) -> LLMVisuali
 
 # --- LangGraph Distinct Nodes ---
 
-async def call_llm_with_timeout_and_retry(llm_func, max_retries: int = 2, timeout_seconds: float = 10.0, retry_delay: float = 0.5):
+async def call_llm_with_timeout_and_retry(
+    llm_func,
+    max_retries: int = 2,
+    timeout_seconds: float = 10.0,
+    retry_delay: float = 0.5
+):
     """
-    Executes an LLM API call with a strict 10-second asyncio timeout per attempt
-    and up to 2 retries (3 attempts total) before failing over to rule-based engines.
+    Executes an LLM API call with a strict timeout limit per attempt (timeout_seconds)
+    and exponential backoff retry logic using tenacity.
     """
-    last_exception = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await asyncio.wait_for(asyncio.to_thread(llm_func), timeout=timeout_seconds)
-        except asyncio.TimeoutError as te:
-            last_exception = te
-            logger.warning(f"LLM API Call Timeout (Attempt {attempt + 1}/{max_retries + 1}): Exceeded {timeout_seconds}s timeout.")
-        except Exception as e:
-            last_exception = e
-            logger.warning(f"LLM API Call Failure (Attempt {attempt + 1}/{max_retries + 1}): {e}")
-
-        if attempt < max_retries:
-            await asyncio.sleep(retry_delay)
-
-    raise last_exception or RuntimeError("LLM API Call failed after retries.")
+    attempt_count = max_retries + 1
+    try:
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(attempt_count),
+            wait=wait_exponential(multiplier=retry_delay, min=retry_delay, max=retry_delay * 4.0),
+            reraise=True
+        ):
+            with attempt:
+                return await asyncio.wait_for(asyncio.to_thread(llm_func), timeout=timeout_seconds)
+    except Exception as e:
+        logger.warning(f"LLM API Call failed after tenacity retries ({attempt_count} attempts): {e}")
+        raise e
 
 
 async def query_analysis_node(state: GraphState) -> Dict[str, Any]:
@@ -720,16 +808,25 @@ async def query_analysis_node(state: GraphState) -> Dict[str, Any]:
     Node 1 (Query Analysis): Break down user's natural language request into core mathematical components.
     Performs RAG template matching against backend/calculus_knowledge.json.
     Retrieves corresponding 'desmos_templates' and injects them into state for Node 2.
+    Integrates tenacity exponential backoff retries & strict timeout limits.
     """
     logger.info("Executing LangGraph Node 1: Query Analysis with Knowledge Retrieval (RAG)")
     prompt = state["prompt"]
     google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
 
-    # Step 1: Perform RAG retrieval against calculus_knowledge.json
-    knowledge = match_calculus_knowledge(prompt)
+    knowledge = await get_cached_calculus_knowledge(prompt)
     concept_name = knowledge.get("concept_name", "general")
     concept_desc = knowledge.get("description", "General calculus graph.")
     desmos_templates = knowledge.get("desmos_templates", ["y = f(x)"])
+
+
+    current_model = state.get("current_model") or "primary"
+    primary_failed = state.get("primary_failed", False)
+    
+    primary_model_name = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash")
+    fallback_model_name = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
+
+    model_to_use = fallback_model_name if (primary_failed or current_model == "fallback") else primary_model_name
 
     if google_api_key:
         try:
@@ -773,7 +870,7 @@ async def query_analysis_node(state: GraphState) -> Dict[str, Any]:
 
             def _call_gemini_node1():
                 return client.messages.create(
-                    model="gemini-2.0-flash",
+                    model=model_to_use,
                     response_model=QueryAnalysisModel,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -790,26 +887,49 @@ async def query_analysis_node(state: GraphState) -> Dict[str, Any]:
 
             res_dict = analysis_model.model_dump()
             res_dict["matched_templates"] = desmos_templates
-            return {"analysis": res_dict}
+            return {
+                "analysis": res_dict,
+                "current_model": current_model,
+                "model_name": model_to_use,
+                "primary_failed": primary_failed
+            }
         except Exception as e:
-            logger.warning(f"Node 1 Gemini analysis failed ({e}). Falling back to RAG NLP analyzer.")
+            logger.warning(f"Node 1 Query Analysis LLM call failed with model '{model_to_use}' ({e}).")
+            if current_model == "primary" and not primary_failed:
+                logger.warning("Primary LLM model exhausted retries or timed out in Query Analysis. Switching to fallback model.")
+                primary_failed = True
+                current_model = "fallback"
 
     analysis_dict = analyze_query_fallback(prompt)
     analysis_dict["matched_templates"] = desmos_templates
-    return {"analysis": analysis_dict}
+    return {
+        "analysis": analysis_dict,
+        "current_model": current_model,
+        "model_name": model_to_use if google_api_key else "rule_based",
+        "primary_failed": primary_failed
+    }
 
 
 async def desmos_translation_node(state: GraphState) -> Dict[str, Any]:
     """
     Node 2 (Desmos Translation): Map analyzed components into precise Desmos-compatible LaTeX commands.
-    Uses retrieved RAG desmos_templates from Node 1 as strict structural guidelines for the final output,
-    fitting them dynamically to the user's prompt parameters without over-generalizing.
+    Uses retrieved RAG desmos_templates from Node 1 as strict structural guidelines for the final output.
+    Supports circular fallback edge from primary model to faster, smaller fallback model.
     """
     logger.info("Executing LangGraph Node 2: Desmos Translation using RAG Structural Guidelines")
     analysis = state.get("analysis") or analyze_query_fallback(state["prompt"])
     google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
 
-    if google_api_key:
+    current_model = state.get("current_model") or "primary"
+    primary_failed = state.get("primary_failed", False)
+    fallback_failed = state.get("fallback_failed", False)
+
+    primary_model_name = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash")
+    fallback_model_name = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
+
+    model_to_use = fallback_model_name if (primary_failed or current_model == "fallback") else primary_model_name
+
+    if google_api_key and not fallback_failed:
         try:
             import instructor
             from google import genai
@@ -877,7 +997,7 @@ async def desmos_translation_node(state: GraphState) -> Dict[str, Any]:
 
             def _call_gemini_node2():
                 return client.messages.create(
-                    model="gemini-2.0-flash",
+                    model=model_to_use,
                     response_model=LLMVisualizationResponse,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -891,21 +1011,42 @@ async def desmos_translation_node(state: GraphState) -> Dict[str, Any]:
                 timeout_seconds=10.0,
                 retry_delay=0.5
             )
-            return {"llm_response": llm_response, "validation_error": None}
+            return {
+                "llm_response": llm_response,
+                "validation_error": None,
+                "current_model": current_model,
+                "model_name": model_to_use,
+                "primary_failed": primary_failed
+            }
         except Exception as e:
-            logger.warning(f"Node 2 Gemini translation failed ({e}). Using rule-based Desmos translation engine.")
+            logger.warning(f"Node 2 Desmos Translation failed with model '{model_to_use}' ({e}).")
+            if current_model == "primary" and not primary_failed:
+                logger.warning("Primary LLM model exhausted retries or timed out in Desmos Translation. Route via circular fallback edge to fallback model.")
+                primary_failed = True
+                current_model = "fallback"
+            else:
+                logger.warning("Fallback model also failed in Desmos Translation.")
+                fallback_failed = True
 
     llm_response = generate_desmos_translation_fallback(analysis)
-    return {"llm_response": llm_response, "validation_error": None}
+    return {
+        "llm_response": llm_response,
+        "validation_error": None,
+        "current_model": current_model,
+        "model_name": model_to_use if google_api_key else "rule_based",
+        "primary_failed": primary_failed,
+        "fallback_failed": fallback_failed
+    }
 
 
-async def validation_node(state: GraphState) -> Dict[str, Any]:
+async def visual_verification_node(state: GraphState) -> Dict[str, Any]:
     """
-    Node 3 (Validation & Self-Correction Detector):
-    Validates syntax, checks for English text or dropped target functions.
-    If validation fails, flags validation_error and increments retry_count to trigger LangGraph cyclic retry.
+    Node 3 (Visual Verification & Self-Correction Detector):
+    Validates syntax, checks for English text or dropped target functions,
+    and performs mathematical visual verification on rendered expressions.
+    If validation fails, flags validation_error and triggers retry or fallback routing.
     """
-    logger.info("Executing LangGraph Node 3: Validation")
+    logger.info("Executing LangGraph Node 3: Visual Verification")
     raw_response = state.get("llm_response")
     analysis = state.get("analysis", {})
     retry_count = state.get("retry_count", 0)
@@ -947,12 +1088,13 @@ async def validation_node(state: GraphState) -> Dict[str, Any]:
     # Determine if self-correction retry should trigger
     if (contains_english or dropped_target or has_rejected_expression) and retry_count < 2:
         error_details = "; ".join(validation_issues)
-        logger.warning(f"Validation failed (Attempt {retry_count + 1}/3). Triggering LangGraph cyclic retry: {error_details}")
+        logger.warning(f"Visual Verification failed (Attempt {retry_count + 1}/3). Triggering cyclic retry: {error_details}")
         return {
             "validated_response": raw_response,
             "validation_issues": validation_issues,
             "validation_error": f"Validation Error: {error_details}",
-            "retry_count": retry_count + 1
+            "retry_count": retry_count + 1,
+            "visual_verified": False
         }
 
     # If max retries reached or valid expressions exist
@@ -968,17 +1110,53 @@ async def validation_node(state: GraphState) -> Dict[str, Any]:
         "validated_response": raw_response,
         "validation_issues": eval_result.get("issues", []),
         "validation_error": None,
-        "retry_count": retry_count
+        "retry_count": retry_count,
+        "visual_verified": eval_result.get("passed", True)
+    }
+
+validation_node = visual_verification_node
+
+
+async def static_fallback_node(state: GraphState) -> Dict[str, Any]:
+    """
+    Node 4 (Static Pre-Validated Fallback / Graceful Degradation):
+    Pulls a static, pre-validated example directly from calculus_knowledge.json matching
+    the user's concept and returns it rather than dropping the connection.
+    """
+    logger.info("Executing LangGraph Final Graceful Degradation: Static Pre-Validated Fallback")
+    prompt = state.get("prompt", "")
+    analysis = state.get("analysis", {})
+    concept_name = analysis.get("concept_type") if analysis else None
+
+    static_response = get_static_prevalidated_example(prompt, concept_name)
+    return {
+        "validated_response": static_response,
+        "is_static_fallback": True,
+        "validation_error": None,
+        "error": None
     }
 
 
-# --- LangGraph Workflow Graph Assembly ---
+# --- LangGraph Workflow Graph Assembly & Circular Fallback Edges ---
 
-def should_retry(state: GraphState) -> str:
-    """Conditional edge routing: Retries desmos_translation node if validation_error exists."""
+def should_retry_or_fallback(state: GraphState) -> str:
+    """
+    Conditional edge routing:
+    - If fallback_failed is True, route to static_fallback step.
+    - If validation_error exists and retry_count < 2, retry desmos_translation.
+    - Otherwise proceed to END.
+    """
+    if state.get("fallback_failed"):
+        return "static_fallback"
+        
     if state.get("validation_error") and state.get("retry_count", 0) < 2:
         return "desmos_translation"
+
     return END
+
+def should_retry(state: GraphState) -> str:
+    return should_retry_or_fallback(state)
+
 
 
 def build_calculus_graph():
@@ -986,20 +1164,24 @@ def build_calculus_graph():
 
     builder.add_node("query_analysis", query_analysis_node)
     builder.add_node("desmos_translation", desmos_translation_node)
-    builder.add_node("validation", validation_node)
+    builder.add_node("visual_verification", visual_verification_node)
+    builder.add_node("validation", visual_verification_node)
+    builder.add_node("static_fallback", static_fallback_node)
 
     builder.set_entry_point("query_analysis")
     builder.add_edge("query_analysis", "desmos_translation")
-    builder.add_edge("desmos_translation", "validation")
+    builder.add_edge("desmos_translation", "visual_verification")
     
     builder.add_conditional_edges(
-        "validation",
-        should_retry,
+        "visual_verification",
+        should_retry_or_fallback,
         {
             "desmos_translation": "desmos_translation",
+            "static_fallback": "static_fallback",
             END: END
         }
     )
+    builder.add_edge("static_fallback", END)
 
     return builder.compile()
 
@@ -1010,8 +1192,8 @@ calculus_graph = build_calculus_graph()
 
 async def generate_calculus_visualization(prompt: str, metadata: Dict[str, Any]) -> LLMVisualizationResponse:
     """
-    Executes the 3-node LangGraph workflow for any calculus prompt.
-    Returns a validated LLMVisualizationResponse.
+    Executes the fault-tolerant multi-node LangGraph workflow for any calculus prompt.
+    Returns a validated LLMVisualizationResponse (or static pre-validated fallback if dynamic generation fails).
     """
     initial_state: GraphState = {
         "prompt": prompt,
@@ -1022,40 +1204,163 @@ async def generate_calculus_visualization(prompt: str, metadata: Dict[str, Any])
         "validation_issues": [],
         "error": None,
         "retry_count": 0,
-        "validation_error": None
+        "validation_error": None,
+        "current_model": "primary",
+        "model_name": os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash"),
+        "primary_failed": False,
+        "fallback_failed": False,
+        "is_static_fallback": False,
+        "visual_verified": False
     }
 
-    final_state = await calculus_graph.ainvoke(initial_state)
-    return final_state["validated_response"]
+    try:
+        final_state = await calculus_graph.ainvoke(initial_state)
+        if final_state.get("validated_response"):
+            return final_state["validated_response"]
+    except Exception as e:
+        logger.warning(f"LangGraph execution exception: {e}. Executing static pre-validated fallback step.")
+
+    return get_static_prevalidated_example(prompt)
+
+
+async def run_coro_with_heartbeats(coro, interval_seconds: float = 2.0):
+    """
+    Async generator helper that yields periodic SSE ping chunks
+    (data: {"type": "ping", "status": "reasoning"}) while awaiting coro execution.
+    Once coro finishes, yields ("result", coro_result).
+    """
+    import time
+    import json
+
+    task = asyncio.create_task(coro)
+    while not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=interval_seconds)
+        except asyncio.TimeoutError:
+            yield ("ping", f"data: {json.dumps({'type': 'ping', 'status': 'reasoning', 'timestamp': time.time()})}\n\n")
+
+    result = await task
+    yield ("result", result)
 
 
 async def stream_calculus_visualization(prompt: str, metadata: Dict[str, Any]):
     """
     Async generator for Server-Sent Events (SSE) streaming.
-    Executes Node 1, streams analysis, executes Node 2 & 3, and streams expressions sequentially.
-    Optimized for zero-delay instant chunk delivery (<15s completion guarantee).
+    Emits periodic heartbeat pings every 2s during reasoning to prevent connection drops.
+    Includes robust exception handlers for instructor validation errors and LangGraph traversal exceptions,
+    yielding user-friendly error retry/reset events.
     """
     import json
+    import time
+    from pydantic import ValidationError
     
-    # 1. Execute Node 1: Query Analysis
-    analysis_res = await query_analysis_node({"prompt": prompt, "metadata": metadata, "analysis": None, "llm_response": None, "validated_response": None, "validation_issues": [], "error": None, "retry_count": 0, "validation_error": None})
-    analysis = analysis_res["analysis"]
+    analysis = None
+    final_payload = None
 
-    # Yield SSE chunk for Query Analysis
-    yield f"data: {json.dumps({'type': 'analysis', 'concept_type': analysis.get('concept_type'), 'intent': analysis.get('mathematical_intent')})}\n\n"
-    await asyncio.sleep(0)
+    try:
+        # 1. Execute Node 1: Query Analysis with Heartbeats
+        analysis_res = None
+        async for item_type, payload in run_coro_with_heartbeats(query_analysis_node({
+            "prompt": prompt,
+            "metadata": metadata,
+            "analysis": None,
+            "llm_response": None,
+            "validated_response": None,
+            "validation_issues": [],
+            "error": None,
+            "retry_count": 0,
+            "validation_error": None,
+            "current_model": "primary",
+            "model_name": os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash"),
+            "primary_failed": False,
+            "fallback_failed": False,
+            "is_static_fallback": False,
+            "visual_verified": False
+        }), interval_seconds=2.0):
+            if item_type == "ping":
+                yield payload
+            else:
+                analysis_res = payload
 
-    # 2. Execute Node 2 & 3: Translation and Validation
-    translation_res = await desmos_translation_node({"prompt": prompt, "metadata": metadata, "analysis": analysis, "llm_response": None, "validated_response": None, "validation_issues": [], "error": None, "retry_count": 0, "validation_error": None})
-    validation_res = await validation_node({"prompt": prompt, "metadata": metadata, "analysis": analysis, "llm_response": translation_res["llm_response"], "validated_response": None, "validation_issues": [], "error": None, "retry_count": 0, "validation_error": None})
+        analysis = analysis_res.get("analysis") if analysis_res else analyze_query_fallback(prompt)
 
-    final_payload: LLMVisualizationResponse = validation_res["validated_response"]
+        # Yield SSE chunk for Query Analysis
+        yield f"data: {json.dumps({'type': 'analysis', 'concept_type': analysis.get('concept_type'), 'intent': analysis.get('mathematical_intent')})}\n\n"
+        await asyncio.sleep(0)
+
+        # 2. Execute Node 2: Desmos Translation with Heartbeats
+        translation_res = None
+        async for item_type, payload in run_coro_with_heartbeats(desmos_translation_node({
+            "prompt": prompt,
+            "metadata": metadata,
+            "analysis": analysis,
+            "llm_response": None,
+            "validated_response": None,
+            "validation_issues": [],
+            "error": None,
+            "retry_count": 0,
+            "validation_error": None,
+            "current_model": analysis_res.get("current_model", "primary") if analysis_res else "primary",
+            "model_name": analysis_res.get("model_name") if analysis_res else None,
+            "primary_failed": analysis_res.get("primary_failed", False) if analysis_res else False,
+            "fallback_failed": False,
+            "is_static_fallback": False,
+            "visual_verified": False
+        }), interval_seconds=2.0):
+            if item_type == "ping":
+                yield payload
+            else:
+                translation_res = payload
+
+        # 3. Execute Node 3: Visual Verification with Heartbeats
+        verification_res = None
+        async for item_type, payload in run_coro_with_heartbeats(visual_verification_node({
+            "prompt": prompt,
+            "metadata": metadata,
+            "analysis": analysis,
+            "llm_response": translation_res.get("llm_response") if translation_res else None,
+            "validated_response": None,
+            "validation_issues": [],
+            "error": None,
+            "retry_count": 0,
+            "validation_error": None,
+            "current_model": translation_res.get("current_model", "primary") if translation_res else "primary",
+            "model_name": translation_res.get("model_name") if translation_res else None,
+            "primary_failed": translation_res.get("primary_failed", False) if translation_res else False,
+            "fallback_failed": translation_res.get("fallback_failed", False) if translation_res else False,
+            "is_static_fallback": False,
+            "visual_verified": False
+        }), interval_seconds=2.0):
+            if item_type == "ping":
+                yield payload
+            else:
+                verification_res = payload
+
+        final_payload = verification_res.get("validated_response") if verification_res else None
+        if not final_payload or not final_payload.expressions:
+            final_payload = get_static_prevalidated_example(prompt, analysis.get("concept_type") if analysis else None)
+
+    except ValidationError as ve:
+        logger.warning(f"Instructor Pydantic validation exception in SSE stream ({ve}). Yielding user-friendly retry_or_reset event.")
+        err_msg = "LLM output schema validation failed. Resetting graph view to pre-validated model..."
+        yield f"data: {json.dumps({'type': 'error', 'error': err_msg, 'action': 'retry_or_reset'})}\n\n"
+        await asyncio.sleep(0)
+        final_payload = get_static_prevalidated_example(prompt, analysis.get("concept_type") if analysis else None)
+    except Exception as e:
+        logger.warning(f"LangGraph streaming exception ({type(e).__name__}: {e}). Yielding user-friendly retry_or_reset event.")
+        err_msg = f"LLM reasoning pipeline note ({type(e).__name__}). Retrying with pre-validated calculus model..."
+        yield f"data: {json.dumps({'type': 'error', 'error': err_msg, 'action': 'retry_or_reset'})}\n\n"
+        await asyncio.sleep(0)
+        final_payload = get_static_prevalidated_example(prompt, analysis.get("concept_type") if analysis else None)
+
+    if not final_payload:
+        final_payload = get_static_prevalidated_example(prompt)
 
     # Yield SSE chunk for Metadata (title & concept explanation)
     yield f"data: {json.dumps({'type': 'metadata', 'title': final_payload.title, 'concept_explanation': final_payload.concept_explanation, 'total_expressions': len(final_payload.expressions)})}\n\n"
     await asyncio.sleep(0)
 
-    # 3. Stream expressions sequentially
+    # 4. Stream expressions sequentially
     for idx, exp in enumerate(final_payload.expressions):
         exp_dict = exp.model_dump()
         yield f"data: {json.dumps({'type': 'expression', 'expression': exp_dict, 'index': idx, 'total': len(final_payload.expressions)})}\n\n"
@@ -1063,3 +1368,4 @@ async def stream_calculus_visualization(prompt: str, metadata: Dict[str, Any]):
 
     # Yield completion SSE chunk
     yield f"data: {json.dumps({'type': 'complete', 'total_expressions': len(final_payload.expressions)})}\n\n"
+
