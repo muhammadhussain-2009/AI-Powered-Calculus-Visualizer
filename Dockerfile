@@ -6,10 +6,11 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
+# Install system dependencies (gcc, libpq-dev for PostgreSQL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    libsqlite3-dev \
+    libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install
